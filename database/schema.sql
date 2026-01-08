@@ -231,19 +231,37 @@ CREATE TABLE user_predictions (
 -- 6. 크론잡 스케줄링 테이블
 -- ============================================
 
--- 댓글 재검증 스케줄
-CREATE TABLE comment_verification_queue (
+-- 매일 수집한 영상별 댓글 스냅샷 (매일 UTC 06:00)
+CREATE TABLE video_comment_snapshots (
+    id SERIAL PRIMARY KEY,
+    video_id VARCHAR(50) REFERENCES videos(video_id) ON DELETE CASCADE,
+    video_url TEXT NOT NULL,
+    snapshot_date DATE NOT NULL, -- 수집한 날짜 (UTC)
+    collected_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    comment_count INTEGER DEFAULT 0, -- 수집된 총 댓글 수
+    comments JSONB, -- [{comment_id, user_id, text, posted_at}]
+    status VARCHAR(20) DEFAULT 'completed', -- completed, failed
+    error_message TEXT,
+    UNIQUE(video_id, snapshot_date)
+);
+
+-- 댓글별 검증 결과 추적 (D+7 검증용)
+CREATE TABLE comment_verifications (
     id SERIAL PRIMARY KEY,
     task_id VARCHAR(50) REFERENCES tasks(task_id) ON DELETE CASCADE,
-    video_url TEXT NOT NULL,
-    comment_id VARCHAR(100) NOT NULL,
     user_id VARCHAR(50) REFERENCES users(user_id) ON DELETE CASCADE,
-    scheduled_at TIMESTAMP NOT NULL, -- 1주일 후
-    status VARCHAR(20) DEFAULT 'pending', -- pending, processing, completed, failed
-    retry_count INTEGER DEFAULT 0,
-    last_error TEXT,
-    processed_at TIMESTAMP,
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    video_id VARCHAR(50) REFERENCES videos(video_id) ON DELETE CASCADE,
+    comment_id VARCHAR(100) NOT NULL,
+    comment_text TEXT,
+    comment_posted_date DATE NOT NULL, -- 댓글이 처음 발견된 날짜
+    verification_date DATE NOT NULL, -- 7일 후 검증 예정일 (comment_posted_date + 7)
+    is_verified BOOLEAN DEFAULT FALSE,
+    is_maintained BOOLEAN, -- 7일 후에도 댓글이 유지되었는지
+    verified_at TIMESTAMP,
+    points_awarded INTEGER DEFAULT 0,
+    status VARCHAR(20) DEFAULT 'pending', -- pending, verified, failed, expired
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE(task_id, comment_id)
 );
 
 -- ============================================
@@ -287,7 +305,6 @@ CREATE INDEX idx_users_active ON users(is_active);
 CREATE INDEX idx_tasks_user_id ON tasks(user_id);
 CREATE INDEX idx_tasks_session_id ON tasks(session_id);
 CREATE INDEX idx_tasks_status ON tasks(status);
-CREATE INDEX idx_tasks_recheck_scheduled ON tasks(recheck_scheduled_at) WHERE recheck_scheduled_at IS NOT NULL;
 
 -- 포인트 거래 내역
 CREATE INDEX idx_transactions_user_id ON point_transactions(user_id, created_at DESC);
@@ -305,8 +322,14 @@ CREATE INDEX idx_campaigns_status ON campaigns(status);
 CREATE INDEX idx_predictions_status ON predictions(status);
 CREATE INDEX idx_predictions_deadline ON predictions(deadline);
 
--- 댓글 검증 큐
-CREATE INDEX idx_verification_queue_scheduled ON comment_verification_queue(scheduled_at, status);
+-- 댓글 스냅샷 조회 최적화
+CREATE INDEX idx_snapshots_video_date ON video_comment_snapshots(video_id, snapshot_date);
+CREATE INDEX idx_snapshots_date ON video_comment_snapshots(snapshot_date);
+
+-- 댓글 검증 조회 최적화
+CREATE INDEX idx_comment_verifications_verification_date ON comment_verifications(verification_date, status);
+CREATE INDEX idx_comment_verifications_user ON comment_verifications(user_id);
+CREATE INDEX idx_comment_verifications_video ON comment_verifications(video_id, comment_posted_date);
 
 -- 비디오 할당 추적
 CREATE INDEX idx_video_time ON video_assignment_tracker(video_id, assigned_at);
@@ -348,4 +371,5 @@ COMMENT ON TABLE task_sessions IS '30분 단위 태스크 할당 세션';
 COMMENT ON TABLE point_transactions IS '포인트 적립/차감 거래 내역';
 COMMENT ON TABLE redemptions IS '바우처 교환 신청 및 승인 내역';
 COMMENT ON TABLE predictions IS '예측 게임 정보';
-COMMENT ON TABLE comment_verification_queue IS '1주일 후 댓글 재검증 스케줄';
+COMMENT ON TABLE video_comment_snapshots IS '매일 UTC 06:00에 수집한 영상별 댓글 스냅샷';
+COMMENT ON TABLE comment_verifications IS '댓글별 D+7 검증 결과 추적';

@@ -1,6 +1,6 @@
 import cron from 'node-cron';
 import { logger } from '../utils/logger.js';
-import { recheckComments } from './recheckComments.js';
+import { collectAndVerifyComments } from './recheckComments.js';
 import { updateVideoMetrics } from './updateMetrics.js';
 import { cleanupExpiredTasks } from './cleanupTasks.js';
 
@@ -13,14 +13,14 @@ export function startCronJobs() {
 
   logger.info('🕐 Starting cron jobs...');
 
-  // 1. 댓글 재검증 (6시간마다)
-  // 1주일 지난 태스크의 댓글을 재확인하여 포인트 지급
-  cron.schedule(process.env.COMMENT_RECHECK_CRON || '0 */6 * * *', async () => {
-    logger.info('⏰ Running comment recheck job');
+  // 1. 댓글 수집 및 검증 (매일 UTC 06:00)
+  // 활성 영상의 댓글을 수집하고 7일 전 댓글과 비교하여 포인트 지급
+  cron.schedule(process.env.COMMENT_COLLECTION_CRON || '0 6 * * *', async () => {
+    logger.info('⏰ Running daily comment collection and verification job');
     try {
-      await recheckComments();
+      await collectAndVerifyComments();
     } catch (error) {
-      logger.error(`Comment recheck job failed: ${error.message}`);
+      logger.error(`Comment collection job failed: ${error.message}`);
     }
   });
 

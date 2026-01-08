@@ -340,20 +340,17 @@ export const verifyTask = asyncHandler(async (req, res) => {
 
   const result = await transaction(async (client) => {
     if (isVerified) {
-      // 검증 성공 - 1주일 후 재검증 스케줄링
-      const recheckAt = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000);
-
+      // 검증 성공 - tasks 테이블 업데이트
       const taskResult = await client.query(
         `UPDATE tasks
          SET
            status = 'verified',
            comment_id = $1,
            first_verified_at = CURRENT_TIMESTAMP,
-           recheck_scheduled_at = $2,
            verified_at = CURRENT_TIMESTAMP
-         WHERE task_id = $3
+         WHERE task_id = $2
          RETURNING *`,
-        [commentId, recheckAt, taskId]
+        [commentId, taskId]
       );
 
       if (taskResult.rows.length === 0) {
@@ -362,18 +359,32 @@ export const verifyTask = asyncHandler(async (req, res) => {
 
       const task = taskResult.rows[0];
 
-      // 댓글 재검증 큐에 추가
+      // comment_verifications에 레코드 생성
+      // 매일 크론잡에서 댓글을 수집할 때 이 레코드를 참조하여 검증 대기열에 추가
+      const today = new Date().toISOString().split('T')[0];
+      const verificationDate = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000)
+        .toISOString().split('T')[0];
+
       await client.query(
-        `INSERT INTO comment_verification_queue (
-          task_id, video_url, comment_id, user_id, scheduled_at
-        )
-        SELECT $1, v.video_url, $2, $3, $4
-        FROM videos v
-        WHERE v.video_id = $5`,
-        [taskId, commentId, task.user_id, recheckAt, task.video_id]
+        `INSERT INTO comment_verifications (
+          task_id, user_id, video_id, comment_id, comment_text,
+          comment_posted_date, verification_date, status
+        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+        ON CONFLICT (task_id, comment_id) DO UPDATE
+        SET comment_posted_date = $6, verification_date = $7, status = $8`,
+        [
+          taskId,
+          task.user_id,
+          task.video_id,
+          commentId,
+          task.comment_text,
+          today,
+          verificationDate,
+          'pending'
+        ]
       );
 
-      logger.info(`Task verified: ${taskId}, recheck scheduled at ${recheckAt}`);
+      logger.info(`Task verified: ${taskId}, verification scheduled for ${verificationDate}`);
 
       return taskResult.rows[0];
     } else {
@@ -401,110 +412,8 @@ export const verifyTask = asyncHandler(async (req, res) => {
   });
 });
 
-// 태스크 재검증 (1주일 후, 크론잡에서 호출)
-export const recheckTask = asyncHandler(async (req, res) => {
-  const { taskId } = req.params;
-  const { commentMaintained } = req.body;
-
-  if (typeof commentMaintained !== 'boolean') {
-    throw new AppError('commentMaintained is required', 400);
-  }
-
-  const result = await transaction(async (client) => {
-    if (commentMaintained) {
-      // 댓글 유지 확인됨 - 포인트 지급
-      const POINTS_PER_TASK = 20; // 1건당 20 NACHO
-
-      const taskResult = await client.query(
-        `UPDATE tasks
-         SET
-           is_comment_maintained = true,
-           recheck_verified_at = CURRENT_TIMESTAMP,
-           points_awarded = $1,
-           points_awarded_at = CURRENT_TIMESTAMP
-         WHERE task_id = $2
-         RETURNING *`,
-        [POINTS_PER_TASK, taskId]
-      );
-
-      if (taskResult.rows.length === 0) {
-        throw new AppError('Task not found', 404);
-      }
-
-      const task = taskResult.rows[0];
-
-      // 사용자 포인트 업데이트
-      const userResult = await client.query(
-        `UPDATE users
-         SET
-           total_points = total_points + $1,
-           total_tasks_completed = total_tasks_completed + 1
-         WHERE user_id = $2
-         RETURNING total_points`,
-        [POINTS_PER_TASK, task.user_id]
-      );
-
-      const newBalance = userResult.rows[0].total_points;
-
-      // 포인트 거래 기록
-      const transactionId = uuidv4();
-      await client.query(
-        `INSERT INTO point_transactions (
-          transaction_id, user_id, amount, balance_after,
-          transaction_type, reference_id, reason
-        ) VALUES ($1, $2, $3, $4, $5, $6, $7)`,
-        [
-          transactionId,
-          task.user_id,
-          POINTS_PER_TASK,
-          newBalance,
-          'task_reward',
-          taskId,
-          'Task completed and comment maintained for 7 days'
-        ]
-      );
-
-      logger.info(`Points awarded: ${task.user_id}, amount: ${POINTS_PER_TASK}, task: ${taskId}`);
-
-      return {
-        ...taskResult.rows[0],
-        points_awarded: POINTS_PER_TASK,
-        new_balance: newBalance
-      };
-    } else {
-      // 댓글 삭제됨 - 포인트 지급 없음
-      const taskResult = await client.query(
-        `UPDATE tasks
-         SET
-           is_comment_maintained = false,
-           recheck_verified_at = CURRENT_TIMESTAMP
-         WHERE task_id = $1
-         RETURNING *`,
-        [taskId]
-      );
-
-      logger.warn(`Task recheck failed - comment deleted: ${taskId}`);
-
-      return taskResult.rows[0];
-    }
-  });
-
-  // 검증 큐에서 제거
-  await query(
-    `UPDATE comment_verification_queue
-     SET status = 'completed', processed_at = CURRENT_TIMESTAMP
-     WHERE task_id = $1`,
-    [taskId]
-  );
-
-  res.json({
-    success: true,
-    message: commentMaintained
-      ? 'Comment maintained - points awarded'
-      : 'Comment deleted - no points awarded',
-    data: result
-  });
-});
+// 주의: recheckTask는 더 이상 사용되지 않습니다.
+// 댓글 검증은 매일 UTC 06:00 크론잡(collectAndVerifyComments)에서 자동으로 처리됩니다.
 
 export default {
   assignTasks,
@@ -512,6 +421,5 @@ export default {
   getTasksForUser,
   getTaskById,
   completeTask,
-  verifyTask,
-  recheckTask
+  verifyTask
 };

@@ -6,8 +6,7 @@ import {
   completeTask,
   verifyTask,
   getTasksForUser,
-  getTaskById,
-  recheckTask
+  getTaskById
 } from '../controllers/task.controller.js';
 
 const router = express.Router();
@@ -33,7 +32,6 @@ router.post('/:taskId/complete', completeTask);
 // 태스크 검증 (댓글 크롤링 후 확인)
 router.post('/:taskId/verify', verifyTask);
 
-// 태스크 재검증 (1주일 후)
-router.post('/:taskId/recheck', recheckTask);
+// 주의: 댓글 재검증은 매일 UTC 06:00 크론잡에서 자동으로 처리됩니다.
 
 export default router;

@@ -2,7 +2,66 @@ import axios from 'axios';
 import * as cheerio from 'cheerio';
 import { logger } from './logger.js';
 
-// TikTok 댓글 크롤링 (공개 API 또는 웹 스크래핑)
+// TikTok 영상의 모든 댓글 수집 (배치 처리용)
+export async function scrapeAllComments(videoUrl) {
+  try {
+    const headers = {
+      'User-Agent': process.env.TIKTOK_USER_AGENT ||
+        'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+    };
+
+    const response = await axios.get(videoUrl, { headers, timeout: 10000 });
+    const html = response.data;
+    const $ = cheerio.load(html);
+
+    let comments = [];
+
+    // ⚠️ 주의: TikTok은 client-side rendering을 사용
+    // 실제 환경에서는 Puppeteer/Playwright 필요
+    // 또는 TikTok Official API 사용 권장
+
+    // JSON 데이터에서 댓글 추출
+    const scriptTags = $('script[type="application/json"]');
+    scriptTags.each((i, elem) => {
+      try {
+        const jsonData = JSON.parse($(elem).html());
+
+        // 댓글 배열 찾기
+        if (jsonData && jsonData.comments && Array.isArray(jsonData.comments)) {
+          comments = jsonData.comments.map(comment => ({
+            comment_id: comment.cid || comment.id,
+            user_id: comment.user?.uid || comment.user?.uniqueId || 'unknown',
+            text: comment.text,
+            posted_at: comment.createTime ? new Date(comment.createTime * 1000).toISOString() : new Date().toISOString()
+          }));
+          return false; // break
+        }
+      } catch (e) {
+        // JSON 파싱 실패 무시
+      }
+    });
+
+    logger.info(`Scraped ${comments.length} comments from ${videoUrl}`);
+
+    return {
+      success: true,
+      comment_count: comments.length,
+      comments: comments
+    };
+
+  } catch (error) {
+    logger.error(`Error scraping comments: ${error.message}`);
+
+    return {
+      success: false,
+      comment_count: 0,
+      comments: [],
+      error: error.message
+    };
+  }
+}
+
+// TikTok 댓글 크롤링 (공개 API 또는 웹 스크래핑) - 레거시
 export async function scrapeCommentFromUrl(commentUrl) {
   try {
     // User-Agent 설정
@@ -150,6 +209,7 @@ export async function scrapeYouTubeMetrics(videoUrl) {
 }
 
 export default {
+  scrapeAllComments,
   scrapeCommentFromUrl,
   scrapeVideoMetrics,
   scrapeYouTubeMetrics
