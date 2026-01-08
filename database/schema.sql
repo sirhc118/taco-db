@@ -136,8 +136,7 @@ CREATE TABLE video_assignment_tracker (
     id SERIAL PRIMARY KEY,
     video_id VARCHAR(50) REFERENCES videos(video_id) ON DELETE CASCADE,
     user_id VARCHAR(50) REFERENCES users(user_id) ON DELETE CASCADE,
-    assigned_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    INDEX idx_video_time (video_id, assigned_at)
+    assigned_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 
 -- ============================================
@@ -308,6 +307,9 @@ CREATE INDEX idx_predictions_deadline ON predictions(deadline);
 
 -- 댓글 검증 큐
 CREATE INDEX idx_verification_queue_scheduled ON comment_verification_queue(scheduled_at, status);
+
+-- 비디오 할당 추적
+CREATE INDEX idx_video_time ON video_assignment_tracker(video_id, assigned_at);
 
 -- ============================================
 -- 트리거 함수
